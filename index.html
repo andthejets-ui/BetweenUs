@@ -187,7 +187,7 @@ body.noui .hud,body.noui .panel{display:none}
       <select id="reaperWalk"><option value="side" selected>Hanging at his side (as the concept)</option><option value="front">Held out in front</option></select></label>
     <label class="check"><input type="checkbox" id="reaperGest" checked> Points and beckons when he sees Kid 1</label>
     <label class="row"><span class="lab"><span>Arrives</span></span>
-      <select id="reaperGate"><option value="gated" selected>After the ice hut door, Kid 2 seen 3×, out with Kid 3</option><option value="start">From the start</option></select></label>
+      <select id="reaperGate"><option value="gated" selected>After the ice hut door, Kid 2 seen 3×, out with Kid 3 (or once Kid 3 goes home)</option><option value="start">From the start</option></select></label>
     <button class="btn" id="reaperBring" type="button">Bring him now (testing)</button>
     <pre class="readout" id="reaperRead">Reaper: loading…</pre>
   </div>
@@ -252,7 +252,7 @@ body.noui .hud,body.noui .panel{display:none}
     <label class="row"><span class="lab"><span>Darkest night</span></span>
       <select id="nightSel"><option value="dark" selected>Darker</option><option value="saved">Saved (previous night)</option></select></label>
     <label class="row"><span class="lab"><span>Time passes</span></span>
-      <select id="todRate"><option value="0">Stopped</option><option value="1200" selected>Evening to night in 20 minutes</option><option value="600">In 10 minutes</option><option value="180">In 3 minutes</option><option value="60">In 1 minute</option></select></label>
+      <select id="todRate"><option value="0">Stopped</option><option value="1800" selected>Evening to night in 30 minutes</option><option value="1200">In 20 minutes</option><option value="600">In 10 minutes</option><option value="180">In 3 minutes</option><option value="60">In 1 minute</option></select></label>
     <div class="row"><div class="lab"><span>Fog</span><span id="fogV">45</span></div>
       <input type="range" id="fog" min="0" max="100" value="45" aria-label="Fog"></div>
     <div class="row"><div class="lab"><span>Snowfall</span><span id="snowV">50</span></div>
@@ -404,7 +404,7 @@ scene.fog = new T.Fog(0x9aa1b8, 30, 60);
 const camera = new T.PerspectiveCamera(24, 1, 1, 900);
 
 /* ---------------- state ---------------- */
-const state = { darkNight:true, tod:.36, todRate:.64/1200, fog:.45, snow:.5, sat:.6, accentsOn:true, lights:'live', zoom:.6, tilt:8/38, depth:.5, cold:.5, wind:.45 };   // 28 m back (32 m is the furthest), 32° down
+const state = { darkNight:true, tod:.36, todRate:.64/1800, fog:.45, snow:.5, sat:.6, accentsOn:true, lights:'live', zoom:.6, tilt:8/38, depth:.5, cold:.5, wind:.45 };   // 28 m back (32 m is the furthest), 32° down
 
 /* ---------------- materials (with saturation control) ---------------- */
 const tunable = [], accents = [];
@@ -5952,7 +5952,9 @@ const R_NODES = {W:[-42, 1.2], C:[10, 1.2], E:[42, 1.2], L:[10, -33]}, R_LINKS =
    from Kid 1, somewhere out of view. */
 const REAPER_GATE = {mode:'gated', hut:false, kid3:false, kid2Need:3, armed:false, cued:false, open:false, cueAt:0, inAt:0};
 function reaperHere(){ return reaper.ready && reaper.on && (REAPER_GATE.mode === 'start' || REAPER_GATE.open); }
-function reaperGateDone(){ const G = REAPER_GATE; return G.hut && G.kid3 && npc.sightings >= G.kid2Need; }
+function reaperGateDone(){ const G = REAPER_GATE; return (G.hut && G.kid3 && npc.sightings >= G.kid2Need) || reaperKid3Gone(); }
+// or, whatever else has been done: once Kid 3 is home for the night (it's got dark), he comes anyway
+function reaperKid3Gone(){ return kid3.ready && state.tod >= kid3.homeAt && (kid3.st === 'home' || kid3.st === 'night'); }
 function reaperArrive(){
   const Rp = reaper, ends = ['W', 'E', 'L'].map(k => { const [x, z] = R_NODES[k]; return {k, x, z, d: Math.hypot(x - player.pos.x, z - player.pos.z), seen: camSeesPoint(new T.Vector3(x, heightAt(x, z) + 1, z))}; });
   ends.sort((a, b) => (a.seen - b.seen) || (b.d - a.d));
@@ -6113,7 +6115,7 @@ function updateReaper(dt){
   if (!reaperHere()){
     Rp.light.intensity = 0; Rp.group.visible = Rp.lantern.group.visible = false;
     if (time0 - (Rp.readAt || 0) > .3){ Rp.readAt = time0; const el = $('reaperRead'), G = REAPER_GATE;
-      if (el && !$('panel').hidden) el.textContent = G.cued ? 'Reaper: coming…' : G.armed ? 'Reaper: all done, he comes soon' : `Reaper: not here yet\n${G.hut ? '✓' : '·'} tried the ice hut door\n${npc.sightings >= G.kid2Need ? '✓' : '·'} seen Kid 2 (${Math.min(npc.sightings, G.kid2Need)}/${G.kid2Need})\n${G.kid3 ? '✓' : '·'} out with Kid 3`; }
+      if (el && !$('panel').hidden) el.textContent = G.cued ? 'Reaper: coming…' : G.armed ? 'Reaper: all done, he comes soon' : `Reaper: not here yet\n${G.hut ? '✓' : '·'} tried the ice hut door\n${npc.sightings >= G.kid2Need ? '✓' : '·'} seen Kid 2 (${Math.min(npc.sightings, G.kid2Need)}/${G.kid2Need})\n${G.kid3 ? '✓' : '·'} out with Kid 3\n(or, regardless: once Kid 3 has gone home for the night)`; }
     return;
   }
   const dx = player.pos.x - Rp.pos.x, dz = player.pos.z - Rp.pos.z, dist = Math.hypot(dx, dz);
