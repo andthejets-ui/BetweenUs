@@ -4651,7 +4651,7 @@ function tone(t, {f0, f1, dur, gain, type='sine', pan=0}){
 
 // heavy: fresh deep snow; light: an existing trench or shallow snow; packed: the road; wood: steps; ice: the lake
 // a footstep heard from a place in the world (Kid 2's feet), through the 3D panner
-function stepSoundAt(kind, pos, gain){
+function stepSoundAt(kind, pos, gain, lpMax = 9000){
   if (!audio.ready || audio.muted) return;
   const ctx = audio.ctx, g = ctx.createGain(), pn = ctx.createPanner();
   g.gain.value = gain;
@@ -4659,7 +4659,7 @@ function stepSoundAt(kind, pos, gain){
   setPannerPos(pn, pos.x, pos.y, pos.z);
   // further off, the snow and air take the top off the sound
   const lp = ctx.createBiquadFilter(); lp.type = 'lowpass';
-  lp.frequency.value = clamp(9000/(1 + Math.hypot(pos.x - player.pos.x, pos.z - player.pos.z)/6), 900, 9000);
+  lp.frequency.value = clamp(lpMax/(1 + Math.hypot(pos.x - player.pos.x, pos.z - player.pos.z)/6), 700, lpMax);
   g.connect(lp).connect(pn).connect(audio.master);
   sfxOut = g; try { stepSound(kind, 0); } finally { sfxOut = null; }
   setTimeout(() => { try { g.disconnect(); lp.disconnect(); pn.disconnect(); } catch (e) {} }, 2000);
@@ -6579,7 +6579,7 @@ function updateKid3(dt){
       const f = lower === 'L' ? l : r;
       if (deep) stamp(f.x, f.z, .12, 1.0, .05, .1); else if (packed) stamp(f.x, f.z, .1, .3, .04, .05);
       const kind = stepTop > 0 ? stepSurf(f.x, f.z) : deep ? (trailAt(f.x, f.z) > -trailU.uDisp.value*.6 ? 'heavy' : 'light') : packed ? 'packed' : 'ice';
-      stepSoundAt(kind, f, lerp(.45, .6, runK));
+      stepSoundAt(kind, f, lerp(.28, .4, runK), 2600);           // a step or two away: under Kid 1's own, and softer
     }
     K.foot = lower;
   } else K.foot = null;
@@ -6803,8 +6803,16 @@ function smGround(b){
   let tr = 0; const q = Math.max(.05, b.r*.55);
   for (const [ox, oz] of [[0,0],[q,0],[-q,0],[0,q],[0,-q]]) tr += Math.min(0, trailAt(b.x + ox, b.z + oz));
   const small = 1 - clamp((b.r - .07)/.15, 0, 1);
-  const y = heightAt(b.x, b.z) + tr/5*.7 + b.r*lerp(.9, .72, small);
-  b.y = b.ySm === undefined ? y : lerp(b.ySm, y, .12); b.ySm = b.y;
+  let y = heightAt(b.x, b.z) + tr/5*.7 + b.r*lerp(.9, .72, small);
+  // and never resting on a high point with the ground falling away under part of it: the sphere is kept a little into
+  // the snow everywhere under it (a slope, a bank, the edge of its own trench), not just at its middle
+  let top = Infinity;
+  for (const k of [0, .4, .75]) for (let i=0; i<(k ? 8 : 1); i++){
+    const a = i/8*Math.PI*2, s = k*b.r, x = b.x + Math.cos(a)*s, z = b.z + Math.sin(a)*s;
+    top = Math.min(top, heightAt(x, z) + Math.min(0, trailAt(x, z))*.85 + Math.sqrt(b.r*b.r - s*s));
+  }
+  y = Math.min(y, top - Math.max(.015, b.r*.1));
+  b.y = b.ySm === undefined ? y : lerp(b.ySm, y, y < b.ySm ? .4 : .12); b.ySm = b.y;
   b.mesh.position.set(b.x, b.y, b.z); b.mesh.scale.setScalar(b.r);
 }
 // how untouched the snow is here: 1 fresh, 0 trodden flat
@@ -6888,6 +6896,29 @@ function smSetup(){
     console.info(`Snowmen: push pose at ${(SM.pushT ?? 0).toFixed(2)}s, pick-up grabs at ${(SM.pickGrabT ?? 0).toFixed(2)}s`);
   } catch (e) { console.warn('Snowman animation setup', e); }
 }
+// the legs, hips and back at the moment the pick-up clip's hands are lowest: knees bent, low over the snow, so that
+// starting a ball (and pushing it while it's still small) he gets right down to it with his hands on it
+const SM_LOW = ['Hips', 'LeftUpLeg', 'LeftLeg', 'LeftFoot', 'RightUpLeg', 'RightLeg', 'RightFoot', 'Spine', 'Spine1', 'Spine2'];
+function lowPose(clip, t, C){
+  const out = {q:[], drop:0}; if (!clip) return out;
+  for (const k of SM_LOW){ const b = C.B[k]; if (!b) continue; const tr = clip.tracks.find(x => x.name === b.name + '.quaternion'); if (tr) out.q.push([b, new T.Quaternion().fromArray(evalTrack(tr, t))]); }
+  const hp = C.B.Hips && clip.tracks.find(x => x.name === C.B.Hips.name + '.position');
+  if (hp && C.hip0) out.drop = Math.min(0, evalTrack(hp, t)[1] - C.hip0.y);
+  return out;
+}
+const _lowSet = new WeakMap();
+function applyLow(L, B, w){
+  const H = B.Hips;
+  if (H){                                   // (if nothing has moved the hips since we last lowered them, put them back first)
+    const was = _lowSet.get(H); if (was && Math.abs(H.position.y - was.set) < 1e-7) H.position.y = was.base;
+    _lowSet.delete(H);
+  }
+  if (!L || w < .01) return;
+  for (const [b, q] of L.q) b.quaternion.slerp(q, w);
+  if (H && L.drop){ const base = H.position.y; H.position.y = base + L.drop*w; _lowSet.set(H, {set:H.position.y, base}); }
+}
+// how far down he gets: all the way while the ball is forming and tiny, back up as it grows
+const smLowW = r => .85*(1 - smooth(.08, .19, r));
 const SM_PUSH_W = {Spine:.35, Spine1:.45, Spine2:.55, Neck:.35, Head:.3, LeftShoulder:.7, RightShoulder:.7};
 function pushPose(clip, t, B){
   const out = [];
@@ -7143,8 +7174,11 @@ function smKid1Pose(dt, B){
     if (!A.smPush && SM.push) A.smPush = pushPose(SM.push, SM.pushT, B);
     if (Rl){
       const r = Rl.b ? Rl.b.r : .07, c = Rl.b ? Rl.b.mesh.position : new T.Vector3(player.pos.x + Math.sin(player.yaw)*(.24 + r*1.05), heightAt(player.pos.x, player.pos.z) + r*.7, player.pos.z + Math.cos(player.yaw)*(.24 + r*1.05));
+      if (!A.smLow && SM.pick1) A.smLow = lowPose(SM.pick1, SM.pickGrabT, kid.char);
+      const lw = smLowW(r)*A.smW;
+      applyLow(A.smLow, B, lw);
       for (const [b, q, w] of (A.smPush || [])) b.quaternion.slerp(q, w*A.smW);
-      bendLayer(B, lerp(.95, .35, clamp((r - .07)/.25, 0, 1)), A.smW);
+      bendLayer(B, lerp(.95, .35, clamp((r - .07)/.25, 0, 1))*(1 - .55*lw), A.smW);
       kid.group.updateMatrixWorld(true);
       handsOnBall(B, player.yaw, c, r, A.smW*smooth(0, 1, Rl.wind/SM_WIND), true);
     } else if (C){
@@ -7481,8 +7515,11 @@ function k3SmLayer(dt){
   K.group.updateMatrixWorld(true);
   if (J.stage === 'roll' || J.stage === 'wind'){
     const r = J.b ? J.b.r : .07, c = J.b ? J.b.mesh.position : new T.Vector3(K.pos.x + Math.sin(K.yaw)*(.24 + r*1.05), heightAt(K.pos.x, K.pos.z) + r*.7, K.pos.z + Math.cos(K.yaw)*(.24 + r*1.05));
+    if (!K.smLow && SM.pick){ try { const lc = retargetClip(SM.pick, K.src || smSource(), K.C); npcInPlace(lc, K.C); K.smLow = lowPose(lc, SM.pickGrabT, K.C); } catch (e) { K.smLow = {q:[], drop:0}; } }
+    const lw = smLowW(r)*K.smW;
+    applyLow(K.smLow, B, lw);
     for (const [b, q, w] of (K.smPush || [])) b.quaternion.slerp(q, w*K.smW);
-    bendLayer(B, lerp(.95, .35, clamp((r - .07)/.25, 0, 1)), K.smW);
+    bendLayer(B, lerp(.95, .35, clamp((r - .07)/.25, 0, 1))*(1 - .55*lw), K.smW);
     K.group.updateMatrixWorld(true);
     handsOnBall(B, K.yaw, c, r, K.smW*(J.b ? 1 : smooth(0, 1, J.windT/SM_WIND)), true);
   } else {
