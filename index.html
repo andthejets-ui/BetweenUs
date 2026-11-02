@@ -7348,7 +7348,15 @@ function k3RollHeading(J, anchor){
   }
   return best;
 }
-function frontYardRoad(x, z){ return onRoad(x, z) || Math.abs(z) < 4.2; }
+function frontYardRoad(x, z){ return onRoad(x, z) || Math.abs(z) < 4.2 || k3Yard(x, z, .5); }
+// the strip of Kid 3's front yard between his house and his fence (m: how far round it counts too): no room to roll a
+// ball in there, and he'd only get caught on the fence going in or out of it other than by the gate
+const _k3y = new T.Vector3();
+function k3Yard(x, z, m = 0){
+  const H = kid3.home; if (!H || !H.group) return false;
+  const v = H.group.worldToLocal(_k3y.set(x, 0, z)), w = H.def.w, d = H.def.d;
+  return Math.abs(v.x) < w/2 + 1 + m && v.z > d/2 - .3 && v.z < d/2 + 2.6 + m;
+}
 function kid3BaseDone(sm){
   const J = kid3.job; if (!J || J.role !== 1 || J.sm) return;
   if (!sm){ k3Park(); return; }                                             // Kid 1 stopped short: he puts his down too
@@ -7378,6 +7386,13 @@ function k3Job(dt, dist){
   switch (J.stage){
     case 'go':
       if (!J.start || J.goT > 7){ J.start = k3StartSpot(); J.goT = 0; if (!J.start){ k3Park(); break; } }   // couldn't get there: somewhere else (or nowhere: he gives up for now)
+      // still in his front yard: out by the gate first (to the path inside it, then through and a couple of metres beyond)
+      if (J.gate === undefined) J.gate = k3Yard(K.pos.x, K.pos.z, .3) ? 0 : 2;
+      if (J.gate < 2){
+        const g = J.gate === 0 ? k3Pt(0, 1.9) : k3Pt(0, 4.4);
+        if (k3Move(g, A.walk ? A.walk.nat : 1.2, dt, false) < .35) J.gate++;
+        J.goT = 0; break;
+      }
       if (J.start && k3Move(J.start, A.walk ? A.walk.nat : 1.2, dt, false) < .3 && smDeep(K.pos.x, K.pos.z)){
         J.stage = 'wind'; J.h = K.yaw; J.windT = 0;
       }
