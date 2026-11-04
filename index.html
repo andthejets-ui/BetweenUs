@@ -8335,7 +8335,10 @@ function readPads(){
 function calibrate(p){
   let info = padInfo[p.index];
   if (!info || info.id !== p.id){
-    const rest = Array.from(p.axes, v => +v || 0);
+    // a standard-mapped pad (any Xbox pad, most others) has its sticks centred at 0 by definition: don't trust the first
+    // reading for that, since after a reload the browser can hand back the stick's last position from before it (and that
+    // offset then reads as the stick being held: the camera spins). Only odd pads get their resting values measured.
+    const rest = Array.from(p.axes, v => p.mapping === 'standard' ? 0 : (+v || 0));
     const triggers = [], sticks = [];
     rest.forEach((v,i) => (p.mapping !== 'standard' && Math.abs(v) > .5 ? triggers : sticks).push(i));
     info = padInfo[p.index] = {id:p.id, rest, sticks, triggers, prev:{}, last:0};
