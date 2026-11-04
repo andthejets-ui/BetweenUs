@@ -6092,7 +6092,7 @@ function loadReaper(){
     reaper.C = C; reaper.mixer = mixer;
     reaper.group = new T.Group(); reaper.group.add(C.rig); scene.add(reaper.group);
     reaper.lantern = makeReaperLantern(); reaper.lantern.group.scale.setScalar(.8); reaper.lantern.top *= .8; scene.add(reaper.lantern.group);
-    reaper.light = new T.PointLight(0xffa04a, 0, 10, 2);   // (as much light as Kid 1's lantern; its shadows come from the same system as his: KS.cube2Cam)
+    reaper.light = new T.PointLight(0xffa04a, 0, 10, 2); scene.add(reaper.light);   // (as much light as Kid 1's lantern; its shadows come from the same system as his: KS.cube2Cam)
     reaper.look = ['Neck', 'Head'].map(n => C.B[n]).filter(Boolean).map(b => [b, new T.Quaternion()]);
     reaper.ready = true;
     console.info('Reaper ready:', Object.entries(reaper.anims).map(([k, v]) => `${k} ${v ? (v.nat !== undefined ? v.nat.toFixed(2) + ' m/s' : v.dur.toFixed(1) + ' s') : 'missing'}`).join(', '));
