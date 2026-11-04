@@ -1112,12 +1112,12 @@ function makeWindow(house, group, x,y,z, nx,nz, ww,wh, upper){
   const len = upper ? 2.6 : 3.4, wid = upper ? 1.8 : 2.4;
   const poolMat = new T.MeshBasicMaterial({map:poolTex, color:glowColor, transparent:true, depthWrite:false, opacity:0,
     polygonOffset:true, polygonOffsetFactor:-3, polygonOffsetUnits:-3});
-  const pool = new T.Mesh(new T.PlaneGeometry(wid,len).rotateX(-Math.PI/2), poolMat);
+  const pool = new T.Mesh(new T.PlaneGeometry(wid, len, 8, 12).rotateX(-Math.PI/2), poolMat);   // (divided up, to lie over the snow: drapePools)
   const dist = (upper ? 2.4 : .25) + len/2;
   pool.position.set(x + nx*dist, .05, z + nz*dist); pool.rotation.y = rotY; pool.renderOrder = 1;
   group.add(pool);
 
-  const win = {glassMat, halo:halo.material, pool:poolMat, level:0, target:0, upper, front: nz === 1, holder};
+  const win = {glassMat, halo:halo.material, pool:poolMat, poolMesh:pool, level:0, target:0, upper, front: nz === 1, holder};
   house.windows.push(win);
   return win;
 }
@@ -1583,6 +1583,23 @@ function fence(group, x0,x1,z, gap){
     addHouseDrift({x:p.x, z:p.z, sx:(x1-x0)/2 + .2, sy:.35, sz:.7, c:Math.cos(r), s:Math.sin(r)}); }
 }
 houseDefs.forEach((def,i)=>{ if (def.fence){ const {g,w,d}=built[i], dx = houses[i].doorX; fence(g, -w/2-1, w/2+1, d/2+2.6, def.kid3 ? [dx - .75, dx + .75] : null); }});   // Kid 3's has a gap at the path
+// the windows' light on the snow lies over the snow as it is (banks, drifts, the shovelled gap), not as one flat sheet
+// that the snow covers in places and leaves hanging in the air in others
+function drapePools(){
+  const v = new T.Vector3();
+  for (const h of houses) for (const w of h.windows){
+    const m = w.poolMesh; if (!m) continue;
+    m.updateWorldMatrix(true, false);
+    const pos = m.geometry.attributes.position, inv = m.matrixWorld.clone().invert();
+    for (let i=0; i<pos.count; i++){
+      v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld);
+      v.y = heightAt(v.x, v.z) + .04;
+      v.applyMatrix4(inv); pos.setY(i, v.y);
+    }
+    pos.needsUpdate = true; m.geometry.computeBoundingSphere();
+  }
+}
+drapePools();
 refreshCoarseGround();                         // the drifts against the houses, steps and fences, in the far ground too
 
 {
@@ -2224,10 +2241,17 @@ function bigIceCrack(){
   iceCreak(1);
 }
 // near the line: a step can crack the ice a little under his foot (and the auto crack steps go to the biggest set)
+// where the ice has already gone at the line: coming back to it, he hears it go again but no new cracks are drawn over
+// the old ones (it's the same broken ice), and he backs off again
+const ICE_BROKEN = [];
+function iceBrokenNear(x, z, m = 0){ let best = null, bd = Infinity; for (const c of ICE_BROKEN){ const d = Math.hypot(c.x - x, c.z - z); if (d < c.r + m && d < bd){ bd = d; best = c; } } return best; }
 function lakeStepCrack(f){
   if (!iceAt(f.x, f.z)) return;
   const b = lakeBeyond(f.x, f.z), k = smooth(-LAKE_WARN, 0, b);
-  if (b > -LAKE_WARN + .3 && Math.random() < .25 + .6*k){ makeCrack(f.x, f.z, R(.9, 1.5)*(.8 + .6*k), false); smallIceCrack(.55 + .45*k); }
+  if (b > -LAKE_WARN + .3 && Math.random() < .25 + .6*k){
+    if (!iceBrokenNear(f.x, f.z, 1)) makeCrack(f.x, f.z, R(.9, 1.5)*(.8 + .6*k), false);
+    smallIceCrack(.55 + .45*k);
+  }
 }
 // the sound of the ice cracking under a step (on top of the footstep): a sharp crack from the recordings, a short
 // ringing ping running off through the ice, and a low thump under it; louder the nearer the thin ice
@@ -2242,9 +2266,19 @@ function smallIceCrack(k){
 // over the line: crack, freeze, look down at it, then back off to safe ice and look back at it
 function startIceRetreat(){
   const fw = {x: Math.sin(player.yaw), z: Math.cos(player.yaw)};
-  const cx = player.pos.x + fw.x*.6, cz = player.pos.z + fw.z*.6;
-  makeCrack(cx, cz, R(5, 6.5), true); makeCrack(player.pos.x - fw.x*.3, player.pos.z - fw.z*.3, 1.8, false);
-  bigIceCrack();
+  let cx = player.pos.x + fw.x*.6, cz = player.pos.z + fw.z*.6;
+  const old = iceBrokenNear(cx, cz, 1.5);
+  if (old){
+    // the same broken ice again: a run of sharp cracks under his feet, no new crack drawn; he looks at the old one
+    cx = old.x; cz = old.z;
+    [0, 160, 340, 620].forEach((ms, i) => setTimeout(() => smallIceCrack(i ? R(.8, 1) : 1), ms + R(0, 60)));
+    iceCreak(1);
+  } else {
+    const size = R(5, 6.5);
+    makeCrack(cx, cz, size, true); makeCrack(player.pos.x - fw.x*.3, player.pos.z - fw.z*.3, 1.8, false);
+    ICE_BROKEN.push({x:cx, z:cz, r:size*.5});
+    bigIceCrack();
+  }
   player.retreat = {t:0, at: new T.Vector3(cx, .05, cz), stage:'freeze', dir: lakeBackDir(player.pos.x)};
   player.vel.multiplyScalar(.2);
   kid.look.forced = player.retreat.at; player.edgeLook = false;
@@ -4295,7 +4329,7 @@ $('closePanel').addEventListener('click', toggleMood);
 $('npcOn').addEventListener('change', e => { npc.on = e.target.checked; });
 $('roofSlide').addEventListener('change', e => { roofSlideChance = +e.target.value; });
 $('throwMax').addEventListener('input', e => { THROW.maxDist = +e.target.value; $('throwV').textContent = THROW.maxDist + ' m'; });
-$('driftsOn').addEventListener('change', e => { driftsOn = e.target.checked; refreshCoarseGround(); patchCX = patchCZ = 1e9; });
+$('driftsOn').addEventListener('change', e => { driftsOn = e.target.checked; refreshCoarseGround(); drapePools(); patchCX = patchCZ = 1e9; });
 $('moonShadows').addEventListener('change', e => { moon.castShadow = e.target.checked; renderer.shadowMap.needsUpdate = true; });
 $('lampSnd').addEventListener('change', e => { LAMPSND.mode = e.target.value; });
 $('redLamp').addEventListener('change', e => { const h = houses.find(h => h.redLamp); if (h){ h.redLamp.mode = e.target.value; h.redLamp.next = 1; } });
@@ -4823,7 +4857,15 @@ KS.cubeRT = new T.WebGLCubeRenderTarget(KS_CUBE, {generateMipmaps:false, minFilt
 KS.cubeCam = new T.CubeCamera(KS_NEAR, KS_FAR, KS.cubeRT);
 KS.cubeCam.children.forEach(c => c.layers.set(KS_LAYER));
 scene.add(KS.cubeCam);
+// and the Reaper's lantern: the same kind of all-round shadow, from his lantern
+KS.cube2RT = new T.WebGLCubeRenderTarget(KS_CUBE, {generateMipmaps:false, minFilter:T.NearestFilter, magFilter:T.NearestFilter});
+KS.cube2Cam = new T.CubeCamera(KS_NEAR, KS_FAR, KS.cube2RT);
+KS.cube2Cam.children.forEach(c => c.layers.set(KS_LAYER));
+scene.add(KS.cube2Cam);
+KS.str2 = 0; KS.mat2 = new T.MeshDistanceMaterial(); KS.mat2.nearDistance = KS_NEAR; KS.mat2.farDistance = KS_FAR;
 KS.uniforms = {
+  uKSCube2:{value:KS.cube2RT.texture}, uKSCubePos2:{value:new T.Vector3()}, uKSStr2:{value:0},
+  uKSLPos2:{value:new T.Vector3()}, uKSLCol2:{value:new T.Color(0,0,0)}, uKSLDist2:{value:10},
   uKSCube:{value:KS.cubeRT.texture}, uKSCubePos:{value:new T.Vector3()},
   uKSMap0:{value:KS.slots[0].rt.texture}, uKSMap1:{value:KS.slots[1].rt.texture},
   uKSMat0:{value:new T.Matrix4()}, uKSMat1:{value:new T.Matrix4()},
@@ -4844,6 +4886,7 @@ uniform sampler2D uKSMap0; uniform sampler2D uKSMap1; uniform mat4 uKSMat0; unif
 uniform vec3 uKSPos0; uniform vec3 uKSPos1; uniform float uKSStr0; uniform float uKSStr1; uniform float uKSRange0; uniform float uKSRange1;
 uniform vec3 uKSLPos; uniform vec3 uKSLCol; uniform float uKSLDist;
 uniform samplerCube uKSCube; uniform vec3 uKSCubePos;
+uniform samplerCube uKSCube2; uniform vec3 uKSCubePos2; uniform float uKSStr2; uniform vec3 uKSLPos2; uniform vec3 uKSLCol2; uniform float uKSLDist2;
 float ksUnpack(vec4 v){ return dot(v, (255.0/256.0) / vec4(16777216.0, 65536.0, 256.0, 1.0)); }
 float ksOcc(sampler2D m, mat4 M, vec3 L, vec3 wp){
   vec4 c = M * vec4(wp, 1.0); if (c.w <= 0.0) return 0.0;
@@ -4856,19 +4899,23 @@ float ksOcc(sampler2D m, mat4 M, vec3 L, vec3 wp){
   return occ / 9.0;
 }
 // is the lantern blocked (by him or a nearby house) between it and this point?
-float ksCubeOcc(vec3 wp){
-  vec3 d = wp - uKSCubePos; float dist = length(d);
+float ksCubeOcc(samplerCube C, vec3 cp, vec3 wp){
+  vec3 d = wp - cp; float dist = length(d);
   float dn = (dist - ${KS_NEAR.toFixed(3)}) / ${(KS_FAR-KS_NEAR).toFixed(3)};
   if (dn >= 1.0) return 0.0;
   vec3 n = d / max(dist, 1e-4);
   vec3 t1 = normalize(cross(n, abs(n.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0))), t2 = cross(n, t1);
-  float r = 0.01, b = dn - 0.008, o = 0.0;
-  o += step(ksUnpack(textureCube(uKSCube, n)), b);
-  o += step(ksUnpack(textureCube(uKSCube, normalize(n + t1*r))), b);
-  o += step(ksUnpack(textureCube(uKSCube, normalize(n - t1*r))), b);
-  o += step(ksUnpack(textureCube(uKSCube, normalize(n + t2*r))), b);
-  o += step(ksUnpack(textureCube(uKSCube, normalize(n - t2*r))), b);
-  return o / 5.0;
+  // soft edge: taps in two rings round the direction (about 2 and 5 texels of the cube out), the rings turned by a
+  // little noise from pixel to pixel so the cube's square texels don't show as steps along the shadow's edge
+  float b = dn - 0.008, o = step(ksUnpack(textureCube(C, n)), b);
+  float rot = fract(sin(dot(floor(gl_FragCoord.xy), vec2(12.9898, 78.233))) * 43758.5453) * 6.2832;
+  for (int i = 0; i < 6; i++){
+    float a = rot + float(i) * 1.0472;
+    vec3 off = t1 * cos(a) + t2 * sin(a);
+    o += step(ksUnpack(textureCube(C, normalize(n + off * 0.012))), b);
+    o += step(ksUnpack(textureCube(C, normalize(n + off * 0.028))), b) * 0.8;
+  }
+  return o / 11.8;
 }
 // window light only exists as the warm patch on the snow, so that is all it can shadow
 float ksWindowFactor(){
@@ -4878,12 +4925,12 @@ float ksWindowFactor(){
 }
 // the lantern's own light on this surface (same maths as the renderer's point light),
 // so his shadow takes away exactly that and nothing else
-vec3 ksLanternLight(vec3 nView){
-  vec3 L = uKSLPos - vKSWorld; float dist = length(L);
+vec3 ksLanternLight(vec3 nView, vec3 lp, vec3 col, float ld){
+  vec3 L = lp - vKSWorld; float dist = length(L);
   vec3 lv = normalize((viewMatrix * vec4(L / max(dist, 1e-4), 0.0)).xyz);
   float nl = max(dot(nView, lv), 0.0);
-  float att = pow(clamp(1.0 - dist / uKSLDist, 0.0, 1.0), 2.0);
-  return uKSLCol * att * nl;
+  float att = pow(clamp(1.0 - dist / ld, 0.0, 1.0), 2.0);
+  return col * att * nl;
 }`;
 let ksRepatchT = 2.5;
 function ksPatch(mat, kind){
@@ -4898,8 +4945,12 @@ function ksPatch(mat, kind){
     if (kind === 'lit') sh.fragmentShader = sh.fragmentShader.replace('#include <lights_fragment_end>',
       `#include <lights_fragment_end>
       if (uKSStr0 > 0.001){
-        float occ = smoothstep(0.0, 0.12, uKSStr0) * ksCubeOcc(vKSWorld);
-        reflectedLight.directDiffuse = max(reflectedLight.directDiffuse - occ * ksLanternLight(normal) * diffuseColor.rgb, vec3(0.0));
+        float occ = smoothstep(0.0, 0.12, uKSStr0) * ksCubeOcc(uKSCube, uKSCubePos, vKSWorld);
+        reflectedLight.directDiffuse = max(reflectedLight.directDiffuse - occ * ksLanternLight(normal, uKSLPos, uKSLCol, uKSLDist) * diffuseColor.rgb, vec3(0.0));
+      }
+      if (uKSStr2 > 0.001){
+        float occ2 = smoothstep(0.0, 0.12, uKSStr2) * ksCubeOcc(uKSCube2, uKSCubePos2, vKSWorld);
+        reflectedLight.directDiffuse = max(reflectedLight.directDiffuse - occ2 * ksLanternLight(normal, uKSLPos2, uKSLCol2, uKSLDist2) * diffuseColor.rgb, vec3(0.0));
       }`);
     else sh.fragmentShader = sh.fragmentShader.replace('#include <output_fragment>', '#include <output_fragment>\ngl_FragColor.a *= ksWindowFactor();');
   };
@@ -4936,14 +4987,14 @@ function ksWindows(){
 }
 const _ksA = new T.Vector3(), _ksB = new T.Vector3();
 // houses within the lantern's reach block its light; the rest stay out of the shadow pass
-function ksHousesNear(pos){
+function ksHousesNear(pos, pos2){
   for (const h of houses){
     if (!h.ksMeshes){
       h.ksMeshes = [];
       h.group.traverse(o => { if (o.isMesh && o.material && !Array.isArray(o.material) && o.material.isMeshLambertMaterial && !o.material.transparent) h.ksMeshes.push(o); });
       h.ksOn = false;
     }
-    const near = !!pos && Math.hypot(h.group.position.x - pos.x, h.group.position.z - pos.z) < KS_FAR + 4;
+    const near = (!!pos && Math.hypot(h.group.position.x - pos.x, h.group.position.z - pos.z) < KS_FAR + 4) || (!!pos2 && Math.hypot(h.group.position.x - pos2.x, h.group.position.z - pos2.z) < KS_FAR + 4);
     if (near !== h.ksOn){ h.ksOn = near; for (const m of h.ksMeshes) near ? m.layers.enable(KS_LAYER) : m.layers.disable(KS_LAYER); }
   }
 }
@@ -4959,7 +5010,21 @@ function updateKidShadows(dt){
     KS.cubeCam.position.copy(_ksA).addScaledVector(_ksB, .22);
     t0 = .8*player.lanternLevel;
   }
-  ksHousesNear(t0 > 0 ? KS.cubeCam.position : null);
+  // the Reaper's lantern, while he's in town and anywhere near Kid 1 (further off, nothing it shadows can be seen)
+  let t2 = 0;
+  if (KS.on && typeof reaper !== 'undefined' && reaperHere() && reaper.light.intensity > .01 && Math.hypot(reaper.pos.x - player.pos.x, reaper.pos.z - player.pos.z) < 45){
+    reaper.lantern.group.getWorldPosition(_ksA);
+    _ksB.set(_ksA.x - reaper.pos.x, 0, _ksA.z - reaper.pos.z); if (_ksB.lengthSq() < 1e-4) _ksB.set(1,0,0); _ksB.normalize();
+    KS.cube2Cam.position.copy(reaper.light.position).addScaledVector(_ksB, .12);
+    t2 = .8;
+  }
+  KS.str2 = lerp(KS.str2, t2, 1 - Math.exp(-6*dt)); KS.uniforms.uKSStr2.value = KS.str2;
+  if (KS.str2 > .003){
+    KS.uniforms.uKSLPos2.value.copy(reaper.light.position);
+    KS.uniforms.uKSLCol2.value.copy(reaper.light.color).multiplyScalar(reaper.light.intensity);
+    KS.uniforms.uKSLDist2.value = reaper.light.distance;
+  }
+  ksHousesNear(t0 > 0 ? KS.cubeCam.position : null, t2 > 0 ? KS.cube2Cam.position : null);
   // the lit window he's standing in, if any
   let t1 = 0, best = null;
   if (KS.on && state.lights !== 'off'){
@@ -4986,7 +5051,7 @@ function updateKidShadows(dt){
   KS.uniforms.uKSLCol.value.copy(kid.light.color).multiplyScalar(kid.light.intensity);
   KS.uniforms.uKSLDist.value = kid.light.distance;
   const active = KS.slots.filter(s => s.str > .003);
-  if (!active.length) return;
+  if (!active.length && KS.str2 <= .003) return;
   renderer.shadowMap.autoUpdate = false;
   const prevRT = renderer.getRenderTarget(), cc = renderer.getClearColor(new T.Color()), ca = renderer.getClearAlpha();
   renderer.setClearColor(0xffffff, 1);
@@ -4996,6 +5061,13 @@ function updateKidShadows(dt){
     scene.overrideMaterial = s0.mat;
     KS.cubeCam.update(renderer, scene);
     KS.uniforms.uKSCubePos.value.copy(KS.cubeCam.position);
+  }
+  if (KS.str2 > .003){
+    KS.cube2Cam.updateMatrixWorld();
+    KS.mat2.referencePosition.copy(KS.cube2Cam.position);
+    scene.overrideMaterial = KS.mat2;
+    KS.cube2Cam.update(renderer, scene);
+    KS.uniforms.uKSCubePos2.value.copy(KS.cube2Cam.position);
   }
   KS.slots.forEach((s, i) => {
     if (i === 0 || s.str <= .003) return;
@@ -6020,7 +6092,7 @@ function loadReaper(){
     reaper.C = C; reaper.mixer = mixer;
     reaper.group = new T.Group(); reaper.group.add(C.rig); scene.add(reaper.group);
     reaper.lantern = makeReaperLantern(); reaper.lantern.group.scale.setScalar(.8); reaper.lantern.top *= .8; scene.add(reaper.lantern.group);
-    reaper.light = new T.PointLight(0xffa04a, 0, 12, 2); scene.add(reaper.light);
+    reaper.light = new T.PointLight(0xffa04a, 0, 10, 2);   // (as much light as Kid 1's lantern; its shadows come from the same system as his: KS.cube2Cam)
     reaper.look = ['Neck', 'Head'].map(n => C.B[n]).filter(Boolean).map(b => [b, new T.Quaternion()]);
     reaper.ready = true;
     console.info('Reaper ready:', Object.entries(reaper.anims).map(([k, v]) => `${k} ${v ? (v.nat !== undefined ? v.nat.toFixed(2) + ' m/s' : v.dur.toFixed(1) + ' s') : 'missing'}`).join(', '));
@@ -6206,7 +6278,8 @@ function updateReaper(dt){
     const L = Rp.lantern.group; B.LeftHand.getWorldPosition(L.position); L.position.y -= Rp.lantern.top + .02;
     const sw = Math.sin(houseClock*2.6)*.08*moveW; L.rotation.set(sw*.6, Rp.yaw, sw);
     const flick = .9 + .1*Math.sin(houseClock*13.1) + .06*Math.sin(houseClock*29.7);
-    Rp.light.position.copy(L.position); Rp.light.position.y += .05; Rp.light.intensity = 1.9*flick;
+    Rp.light.position.copy(L.position); Rp.light.position.y += .05; Rp.light.intensity = 2.0*flick;
+    Rp.light.position.x += Math.cos(Rp.yaw)*.06; Rp.light.position.z -= Math.sin(Rp.yaw)*.06;   // (a touch out from his side, clear of the robe)
     Rp.lantern.flame.scale.set(1, 1.6*flick, 1);
   }
   // footsteps: big, slow and heavy, pressed deep into fresh snow
